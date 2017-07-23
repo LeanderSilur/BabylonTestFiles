@@ -1,0 +1,218 @@
+import sys
+import os
+from pymel.core import *
+from pymel.core.datatypes import *
+
+directory_path = "D:\\website"
+file_name = "cube.babylon"
+
+
+def BabBool(attr):
+    val = getAttr(attr)
+    if (val):
+        return "true"
+    else:
+        return "false"
+
+
+def BabProducer(fd):
+    data = """
+    "producer":
+    {
+        "name":"Maya",
+        "version":"2017",
+        "exporter_version":"0.0.0",
+        "file":"""+"\""
+    data += file_name  + """"
+    }"""
+    fd.write(data)
+#_______________________BONES
+
+def top_level_joints():
+    joints = ls(typ="joint")
+    bones = []
+    for j in joints:
+        isTopLevel = True
+        parents = j.getAllParents() 
+        for p in parents:
+            if (objectType(p) == "joint"):
+                isTopLevel = False
+        if (isTopLevel):
+            bones.append(j)
+    return bones
+
+class Bone:
+    def __init__(self, ID, obj, parentID):
+        self.ID = ID
+        self.obj = obj
+        self.parentID = parentID
+    def getChildren(self, running):
+        joints = self.obj.listRelatives(c = 1, typ = "joint")
+        bones = []
+        for j in joints:
+            b = Bone(running, j, self.ID)
+            bones.append(b)
+            running += 1
+        bones.append(running)
+        return bones
+    def BabylonFormat(self, indent = "\t\t"):
+        ni = "\n" + indent + "\t" #newline and indent
+        data = indent + "{"
+        data += ni + "\"index\":" + str(self.ID) + ","
+        data += ni + "\"parentBoneIndex\": " + str(self.parentID) + ","
+        data += ni + "\"name\": \"" + self.obj.name() + "\","
+        data += ni + "\"matrix\": " + str(xform(self.obj, q = 1, m = 1))+ ","
+        data += ni + "\"animations\":{}\n"
+        data += indent + "}"
+        return data
+
+def get_skeleton(root, skeleton_id, name = None, indent = "\t"):
+    bones = []
+    parents = [Bone(0, root, -1)]
+    children = []
+    id = 1
+    while (len(parents) > 0):
+        for p in parents:
+            ch = p.getChildren(id)
+            id = ch.pop(-1)
+            children.extend(ch)
+        bones.extend(parents)
+        parents = children
+        children = []
+    if (name == None):
+        p = root.listRelatives(p = 1)
+        if (len(p) > 0):
+            name = p[0].name()
+        else:
+            name = root.name()     
+    ni = "\n" + indent + "\t"
+    data = indent + "{"
+    data += ni  + "\"name\": \"" + name + "\","
+    data += ni  + "\"id\": \"" + str(skeleton_id) + "\","
+    data += ni  + "\"bones\": ["
+    for idx, b in enumerate(bones):
+        data += b.BabylonFormat(indent + "\t\t")
+        if (idx < len(bones)-1):
+            data += ",\n"
+    data += ni + "],"
+    data += ni + "\"needInitialSkinMatrix\": true\n"
+    data += indent + "}"
+    return data
+
+def BabSkeletons(fd):
+    tljs = top_level_joints()
+    print(tljs)
+    fd.write("\n\"skeletons\":\n[\n")
+    for idx, tlj in enumerate(tljs):
+        fd.write(get_skeleton(tlj, idx))
+    fd.write("\n]")
+    
+#_______________________MESHES
+
+def BabMatricesSkinning(shape, fd):
+    
+    pass
+
+
+def BabIndicesFromShape(shape, fd):
+    data = "\t\"indices\":["
+    for f in shape.f:
+        vs = f.getVertices()
+        for v in vs:
+            data += str(v) + ","
+    data = data[:-1] + "],\n"
+    fd.write(data)
+    
+def BabNormalsFromShape(shape, fd):
+    polySoft = polySoftEdge(shape, a=180, ch=1)[0]
+    data = "\t\"normals\":["
+    
+    for i in range(0, len(shape.vtx)):
+        norms = polyNormalPerVertex(shape.vtx[i], q = 1, rel=1, xyz = 1);
+        data += str(norms[0]) + "," + str(norms[1]) + "," + str(norms[2]) + ","
+    data = data[:-1] + "],\n"
+    fd.write(data)
+    delete(polySoft)
+
+def BabPositionsFromShape(shape, fd):
+    data = "\t\t\"positions\":["
+    for i in range(0, len(shape.vtx)):
+        pos = shape.vtx[i].getPosition()
+        pos[0] *= -1
+        data += str(pos)[1:-1] + ", "
+    data = data[:-2] + "],\n"
+    fd.write(data)
+
+def BabObj(shape, fd):
+    polyTri = polyTriangulate(shape)[0]
+    obj = listRelatives(shape, p = 1)[0]
+    fd.write("\t\t{\n");
+    fd.write("\t\t\"name\":\"" + obj.name() + "\",\n")
+    fd.write("\t\t\"id\":\"" + obj.name() + "\",\n")
+    fd.write("\t\t\"billboardMode\":0,\n")
+    pos = obj.getTranslation()
+    pos[0] *=-1
+    fd.write("\t\t\"position\":" + str(pos) + ",\n")
+    quat = obj.getRotation(quaternion=1)
+    quat[0] *=1
+    quat[1] *=-1
+    quat[2] *=-1
+    quat[3] *=1
+    fd.write("\t\t\"rotationQuaternion\":" + str(quat) + ",\n")
+    fd.write("\t\t\"scaling\":" + str(obj.getScale()) + ",\n")
+    fd.write("\t\t\"isVisible\":" + BabBool(obj + ".visibility") + ",\n")
+    fd.write("\t\t\"isEnabled\":true,\n")
+    fd.write("\t\t\"checkCollisions\":false,\n")
+    fd.write("\t\t\"receiveShadows\":false,\n")
+    BabPositionsFromShape(shape, fd)
+    BabNormalsFromShape(shape, fd)
+    BabIndicesFromShape(shape, fd)
+    BabMatricesSkinning(shape, fd)
+    fd.write("\t\t\"instances\":[]\n")
+    fd.write("\t\t}\n")
+    delete(polyTri)
+
+
+def CreateShapeList():
+    objs = ls(typ = "transform")
+    shapes = []
+    for i in range(0, len(objs)):
+        children = listRelatives(objs[i], s = 1, typ="mesh")
+        for c in children:
+            
+            if(nodeType(c, q=True) == 'mesh'):
+                shapes.append(c)
+                break
+    return shapes
+
+def BabMeshes(fd):
+    shapes = CreateShapeList()
+    print(shapes)
+    fd.write("\n\"meshes\":\n\t[\n")
+    for idx, shape in enumerate(shapes):
+        BabObj(shape, fd)
+        if (idx < len(shapes)-1):
+            fd.write(",\n")
+    fd.write("\n\t]")
+
+
+
+
+def ExportData():
+    full_path = os.path.join(directory_path, file_name)
+    
+    print full_path
+    
+    fd = open(full_path, "w")
+    fd.write("{")
+    
+    BabProducer(fd)
+    fd.write(",")
+    
+    BabSkeletons(fd)
+    fd.write(",")
+    
+    BabMeshes(fd)
+    fd.write("\n}");
+
+ExportData()
